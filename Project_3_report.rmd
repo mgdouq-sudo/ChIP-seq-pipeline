@@ -1,0 +1,502 @@
+---
+output:
+  html_document: default
+  pdf_document:
+    latex_engine: xelatex
+---
+
+```{r}
+library(tidyverse)
+library(ggplot2)
+library(magick)
+library(stringr)
+library(rtracklayer)
+library(knitr)
+library(eulerr)
+library(enrichR)
+```
+
+# Introduction:
+RUNX1 is a transcription factor with context-dependent roles in breast cancer, where it can act as either a tumor suppressor or an oncogene, and it functions through interactions with chromatin regulators, estrogen receptor α, Polycomb complexes, and the nuclear matrix. Because breast cancer involves major alterations in nuclear structure and because RUNX1 has been linked to both gene regulation and chromatin interactions, the study was performed to determine how loss of RUNX1 affects both transcriptional programs and higher-order genome organization in MCF-7 breast cancer cells. To address these questions, the authors used RNA-seq to measure RUNX1-dependent changes in gene expression, ChIP-seq to map RUNX1 binding sites and identify direct regulatory relationships, and Hi-C to assess whether RUNX1 influences 3D chromatin architecture, including TAD boundaries and local long-range interactions. Together, these methods allowed them to connect RUNX1 binding with alterations in gene expression and genome folding.
+
+# Methodology:
+ChIP-sequencing data were processed using a fully reproducible workflow implemented in Nextflow v25.04.6.5954. All tools were run with default parameters unless otherwise specified. Initial quality assessment of raw single-end FASTQ files was performed using FastQC v0.12.1 to evaluate per-base sequence quality, GC content, and adapter contamination. Adapter trimming and quality filtering were conducted using Trimmomatic v0.39, removing Illumina adapter sequences and applying quality-based trimming. A MultiQC v1.25 report was generated to aggregate FastQC metrics, Trimmomatic trimming statistics, and alignment summaries.
+
+Reference genome indexing and read alignment were performed using Bowtie2 v2.5.4. The genome index was built from the reference genome FASTA file, and trimmed reads were aligned to produce SAM files. Aligned reads were converted to BAM format, sorted by genomic coordinates, and indexed using SAMtools v1.21. Alignment statistics were generated using samtools flagstat to assess mapping rates and read quality metrics.
+Signal tracks for visualization were created using deepTools v3.5.5 bamCoverage, which generated normalized bigWig files from sorted BAM files. Sample correlation analysis was performed using deepTools multiBigwigSummary to compute genome-wide signal across all IP samples, followed by plotCorrelation to generate Spearman correlation heatmaps.
+
+Peak calling was conducted using HOMER v4.11 findPeaks in factor mode, comparing each IP sample against its corresponding input control. Tag directories were first created using makeTagDirectory from aligned BAM files. Peak positions in HOMER format were converted to BED format using pos2bed.pl and sorted using BEDtools v2.31.1. Reproducible peaks were identified by intersecting replicate peak calls and requiring peaks to be present in all replicates using bedtools intersect. Peaks overlapping ENCODE blacklist regions were removed using bedtools to exclude artifact-prone genomic regions.
+
+Peak annotation was performed using HOMER annotatePeaks.pl, which assigned peaks to genomic features (promoter, exon, intron, intergenic) based on the provided GTF annotation and calculated distances to the nearest transcription start site. Signal enrichment profiles around gene bodies were visualized using deepTools computeMatrix in scale-regions mode, adding 2000bp of padding to both the start and end site, and with UCSC gene annotations, followed by plotProfile to generate aggregate enrichment plots across all IP samples.
+
+De novo motif discovery was conducted using HOMER findMotifsGenome.pl on the final filtered peak set, searching for enriched sequence motifs within ±200 bp of peak summits against size-matched background regions from the reference genome.
+
+# Quality Control Evaluation:
+
+The sequencing data comprised four samples with read counts ranging from 10.1 million (INPUT_rep2) to 28.6 million (INPUT_rep1) reads. FastQC analysis revealed generally high-quality sequencing data, with mean quality scores consistently above Q30 across all base positions and per-sequence quality scores predominantly in the high-quality range. However, several flags were raised by FastQC: per base sequence content showed warnings for all samples, indicating non-uniform base composition in the first ~15 bp of reads, which is typical for random-primed libraries. Per sequence GC content displayed bimodal distributions in all samples, with failures flagged for INPUT samples, suggesting potential contamination or the presence of distinct sequence populations. Sequence duplication levels were high, particularly in the IP samples (74.3% and 89.1% duplicates in IP_rep2 and IP_rep1, respectively), which is expected for ChIP-seq experiments due to genuine biological enrichment at binding sites. Adapter contamination was detected, with overrepresented sequences identified as Illumina adapters (GATCGGAAGAGCACACGTCTGAACTCCAGTCAC...) comprising 0.6-0.9% of reads in INPUT samples, though adapter content began accumulating only after position 70 bp and reached a maximum of ~5% by the read end.
+
+Following Trimmomatic adapter trimming, alignment rates to the reference genome were excellent, with 96.6-98.9% of reads successfully mapping (INPUT_rep1: 28.6M reads with 1.1% dropped; INPUT_rep2: 10.1M reads with 1.4% dropped; IP_rep1: 27.8M reads with 3.4% dropped; IP_rep2: 28.2M reads with 4.3% dropped). The substantially lower read count in INPUT_rep2 compared to other samples raises some concern about library preparation consistency, though the high mapping rate suggests the data quality itself was not compromised. Overall, the experiment was of high quality and suitable for downstream ChIP-seq analysis. The high duplication rates in IP samples are expected and appropriate for peak calling, the adapter contamination was minimal and successfully removed by trimming, and the excellent alignment rates confirm compatibility with the reference genome. The bimodal GC content distribution, while flagged by FastQC, is not uncommon in ChIP-seq data where enriched regions may have different sequence composition than background. No additional quality improvement steps are necessary for this dataset.
+
+# Signal Coverage Plot:
+
+```{r}
+img <- image_read("signal_coverage.png")
+plot(img)
+```
+
+
+The signal coverage plot displays the aggregate ChIP-seq signal enrichment across all genes, with the x-axis representing genomic positions relative to the transcription start site (TSS) and transcription end site (TES), spanning from 2 kb upstream of the TSS to 2 kb downstream of the TES. The y-axis indicates the normalized read coverage or signal intensity. Both biological replicates (IP_rep1 in blue and IP_rep2 in green) show highly concordant profiles, with a pronounced peak of enrichment centered at the TSS. The signal gradually increases approaching the TSS from the upstream region, reaches a maximum at or immediately downstream of the TSS, and then rapidly declines to baseline levels shortly after transcription initiation. Signal remains relatively flat and low across gene bodies (between TSS and TES) and downstream regions, with minimal enrichment observed beyond the promoter-proximal region.
+
+This enrichment pattern is consistent with RUNX1's known role as a transcription factor that binds primarily to promoter regions to regulate gene expression. As demonstrated by Barutcu et al. (2016), RUNX1 functions prominently in transcriptional activation, with the strongest binding signal observed at promoter regions. The sharp peak at the TSS suggests that RUNX1 preferentially binds to promoters and is directly involved in regulating transcriptional initiation rather than elongation. The lack of sustained signal across gene bodies indicates that RUNX1 does not travel with elongating RNA polymerase II but remains localized to promoter-proximal regions where it can recruit cofactors and chromatin modifiers. This promoter-centric binding pattern supports RUNX1's role in establishing competency for transcription by organizing local chromatin architecture and facilitating enhancer-promoter interactions. The strong reproducibility between replicates and the clear biological pattern confirm high-quality data suitable for downstream peak calling and analysis of RUNX1-mediated gene regulation in the cellular context being studied.RetryClaude can make mistakes. Please double-check responses.
+
+# Motif Finding:
+
+```{r}
+img <- image_read("motifs.png")
+plot(img)
+```
+The de novo motif discovery analysis identified several significantly enriched transcription factor binding motifs within the ChIP-seq peaks. The top three enriched motifs correspond to RUNX family members (RUNX1, RUNX2) and related RUNX-AML fusion proteins, with RUNX(Runt)/HPC7-Runx1 being the most significantly enriched (p-value = 1e-650, present in 25.65% of target sequences). This high enrichment of RUNX motifs validates the specificity of the ChIP-seq experiment and confirms successful immunoprecipitation of RUNX1-bound regions.
+
+Beyond the expected RUNX motifs, several additional transcription factor motifs were identified, including Fosl2, Fra2, GRHL2, Fra1, Fos, JunB, BATF, Atf3, Jun-AP1, AP-1, and Foxa2. These findings are particularly interesting as they suggest RUNX1 may function as part of larger transcriptional regulatory complexes. Notably, the enrichment of AP-1 family members (Fos, Jun, Fra) is consistent with the Barutcu et al. study, which identified AP1 (FOS/JUN) binding motifs in their RUNX1 ChIP-seq analysis and suggested these factors may be functionally related co-regulators. The presence of multiple bZIP family transcription factors (Fosl2, Fra1, Fra2, BATF, Atf3) indicates RUNX1 may cooperate with these factors to regulate genes involved in cellular differentiation, proliferation, and stress responses. This co-occupancy pattern supports the model that RUNX1 functions not in isolation but as part of combinatorial transcription factor networks that fine-tune gene expression in response to developmental and environmental signals.
+
+# Overlap your ChIPseq results with the original RNAseq data:
+
+# 1. Create a figure that displays the same information of figure 2F from the original publication using your annotated peaks and the RNAseq results. The figure does not have to be the same style but must convey the same information using your results.
+
+# Load the data:
+
+```{r}
+rnaseq_df <- read_tsv("GSE75070_MCF7_shRUNX1_shNS_RNAseq_log2_foldchange.txt")
+
+peak_df <- read_tsv("results/homer_annotated_full/annotated_peaks.txt")
+```
+
+# Sanity check:
+
+```{r}
+cat("=== RNA-seq Data ===\n")
+cat("Shape:", nrow(rnaseq_df), "rows x", ncol(rnaseq_df), "columns\n")
+print(head(rnaseq_df))
+
+cat("=== Annotated Peaks Data ===\n")
+cat("shape:", nrow(peak_df), "rows x", ncol(peak_df), "columns\n")
+print(head(peak_df))
+```
+
+# Filter the paper's RNA-seq data based on their established thresholds:
+
+```{r}
+sigrna <- rnaseq_df %>% filter(padj < 0.01 & abs(log2FoldChange) > 1)
+
+cat("\n=== Significant DE genes ===\n")
+cat("Total genes in RNA-seq", nrow(rnaseq_df), "\n")
+cat("Significant genes in RNA_seq", nrow(sigrna), "\n")
+```
+
+# Find overlapping genes between our ChIP-seq results and their significant RNA-seq data:
+
+```{r}
+sig_de_genes <- sigrna %>% pull(genename) %>% unique() %>% na.omit()
+
+peak_genes <- peak_df %>% pull(`Gene Name`) %>% unique() %>% na.omit()
+
+overlap_genes <- intersect(sig_de_genes, peak_genes)
+
+cat("\n=== Overlap Analysis ===\n")
+cat("Significant DE genes:", length(sig_de_genes), "\n")
+cat("Genes with ChIP-seq peaks:", length(peak_genes), "\n")
+cat("Overlapping genes:", length(overlap_genes), "\n")
+```
+
+# Create a dataframe of the overlapping genes for further analysis:
+
+```{r}
+overlap_rnaseq <- sigrna %>% filter(genename %in% overlap_genes)
+
+overlap_peaks <- peak_df %>% filter(`Gene Name` %in% overlap_genes)
+
+cat("\nOverlapping RNA-seq entries:", nrow(overlap_rnaseq), "\n")
+cat("Overlapping peak entries:", nrow(overlap_peaks), "\n")
+
+# Preview overlapping genes
+print(head(overlap_rnaseq))
+
+```
+
+# Checking which genes have multiple peaks:
+
+```{r}
+overlap_peaks %>%
+  count(`Gene Name`) %>%
+  filter(n > 1)
+```
+
+# Recreating Figure 2F from the paper:
+# Step 1: Categorize DE genes as up or down regulated
+
+```{r}
+up_genes <- sigrna %>% filter(log2FoldChange > 1) %>% pull(genename) %>% unique()
+
+down_genes <- sigrna %>% filter(log2FoldChange < -1) %>% pull(genename) %>% unique()
+
+cat("Up-regulated genes:", length(up_genes), "\n")
+cat("Down-regulated genes:", length(down_genes), "\n")
+```
+
+# Loading GTF file to create +/-kb TSS of whole gene body:
+
+```{r}
+# Read the GTF file to get GENE coordinates
+gtf <- rtracklayer::import("refs/gencode.v45.primary_assembly.annotation.gtf")
+genes_gr <- gtf[gtf$type == "gene"]
+```
+
+```{r}
+# Create gene coordinate lookup table
+gene_coords <- data.frame(
+  gene_name = genes_gr$gene_name,
+  chr = as.character(seqnames(genes_gr)),
+  gene_start = start(genes_gr),
+  gene_end = end(genes_gr),
+  stringsAsFactors = FALSE
+) %>%
+  distinct(gene_name, .keep_all = TRUE)
+
+# Remove any existing gene coordinate columns from peak_df
+peak_df_clean <- peak_df %>%
+  select(-any_of(c("gene_start", "gene_end", "chr", "gene_start.x", "gene_start.y", 
+                   "gene_end.x", "gene_end.y", "gene_coords")))
+
+# Now perform the merge
+peak_df_with_coords <- peak_df_clean %>%
+  left_join(gene_coords, by = c("Gene Name" = "gene_name"))
+
+# Check the merge
+cat("Rows with gene coordinates:", sum(!is.na(peak_df_with_coords$gene_start)), "\n")
+```
+
+# Step 2: Get genes with RUNX1 peaks at different distances
+
+```{r}
+# +/- 5kb of TSS
+genes_with_peaks_5kb <- peak_df %>% 
+  filter(abs(`Distance to TSS`) <= 5000) %>% 
+  pull(`Gene Name`) %>% 
+  unique()
+
+# +/- 20kb of whole gene
+genes_with_peaks_20kb_gene <- peak_df_with_coords %>%
+  filter(
+    !is.na(gene_start),
+    !is.na(gene_end),
+    Chr == chr,
+    End >= (gene_start - 20000),
+    Start <= (gene_end + 20000)
+  ) %>%
+  pull(`Gene Name`) %>%
+  unique()
+
+cat("Genes with peaks within 5kb of TSS:", length(genes_with_peaks_5kb), "\n")
+cat("Genes with peaks within 20kb of whole gene:", length(genes_with_peaks_20kb_gene), "\n")
+```
+
+# Step 3: Calculate overlap for each category and distance
+
+```{r}
+
+# 5kb TSS
+up_bound_5kb <- sum(up_genes %in% genes_with_peaks_5kb)
+
+up_not_bound_5kb <- length(up_genes) - up_bound_5kb
+
+down_bound_5kb <- sum(down_genes %in% genes_with_peaks_5kb)
+
+down_not_bound_5kb <- length(down_genes) - down_bound_5kb
+
+# 20kb 
+up_bound_20kb <- sum(up_genes %in% genes_with_peaks_20kb_gene)
+
+up_not_bound_20kb <- length(up_genes) - up_bound_20kb
+
+down_bound_20kb <- sum(down_genes %in% genes_with_peaks_20kb_gene)
+
+down_not_bound_20kb <- length(down_genes) - down_bound_20kb
+
+```
+
+# Step 4: Create dataframe for plotting
+
+```{r}
+plot_data <- data.frame(
+  Category = c("Up-regulated", "Up-regulated", "Down-regulated", "Down-regulated",
+               "Up-regulated", "Up-regulated", "Down-regulated", "Down-regulated"),
+  Binding = c("RUNX1 bound", "Not bound", "RUNX1 bound", "Not bound",
+              "RUNX1 bound", "Not bound", "RUNX1 bound", "Not bound"),
+  Count = c(up_bound_5kb, up_not_bound_5kb, down_bound_5kb, down_not_bound_5kb,
+            up_bound_20kb, up_not_bound_20kb, down_bound_20kb, down_not_bound_20kb),
+  Distance = c(rep("+/- 5kb of TSS", 4), rep("+/- 20kb of whole gene", 4))
+)
+plot_data
+```
+
+```{r}
+# Calculate percentages within each category and distance
+plot_data <- plot_data %>% group_by(Category, Distance) %>% mutate(Percentage = Count / sum(Count) * 100) %>% ungroup()
+plot_data
+```
+
+```{r}
+# Set factor order for proper display
+plot_data$Binding <- factor(plot_data$Binding, levels = c("Not bound", "RUNX1 bound"))
+plot_data$Distance <- factor(plot_data$Distance, levels = c("+/- 5kb of TSS", "+/- 20kb of whole gene"))
+
+print(plot_data)
+```
+
+# Step 5: Create stacked bar chart (side by side like Figure 2F)
+
+```{r}
+ggplot(plot_data, aes(x = Category, y = Percentage, fill = Binding)) +
+  geom_bar(stat = "identity", position = "stack") +
+  geom_text(aes(label = Count), 
+            position = position_stack(vjust = 0.5),
+            size = 4) +
+  scale_fill_manual(values = c("Not bound" = "#95A5A6", "RUNX1 bound" = "#E74C3C")) +
+  facet_wrap(~Distance) +
+  labs(x = "", 
+       y = "Percentage of genes",
+       title = "RUNX1 Binding at Differentially Expressed Genes") +
+  theme_minimal() +
+  theme(legend.title = element_blank(), legend.position = "right")
+```
+
+# Do you observe any differences in the number of overlapping genes from both analyses? - If you do observe a difference, explain at least two factors that may have contributed to these differences. 
+
+Yes, our results differ from the paper’s Figure F, likely because:
+
+1. Genome version (hg19 vs hg38): The original study used hg19 while we used hg38. Gene annotations and TSS positions shifted between assemblies.
+
+For the +/- 5kb of TSS analysis, the paper identified 245 total RUNX1-bound differentially expressed genes (84 down-regulated, 161 up-regulated), while we identified 168 genes (71 down-regulated, 97 up-regulated). This represents 77 fewer genes (31% reduction) in our analysis. For the +/- 20kb of whole gene analysis, the paper reported 289 RUNX1-bound genes (128 down-regulated, 161 up-regulated), compared to my 209 genes (86 down-regulated, 123 up-regulated), a difference of 80 genes (28% reduction).
+
+The largest discrepancy occurs in up-regulated genes within 5kb of TSS, where we detected 64 fewer genes than the paper (97 vs 161, representing a 40% reduction). Despite these quantitative differences, the overall biological trends remain consistent: both analyses show that the 20kb whole gene approach captures more RUNX1-bound genes than the 5kb TSS approach, and up-regulated genes exhibit more RUNX1 binding than down-regulated genes across both distance windows.
+
+2. Different peak reproducibility and filtering criteria: Both analyses used HOMER for peak calling, but the downstream reproducibility and filtering steps likely differed because the paper did not specify how they defined “reproducible peaks.” In our pipeline, we required direct overlap between peaks from both replicates and removed ENCODE blacklist regions, whereas the paper may have used alternative methods such as IDR thresholds, different overlap criteria, or different blacklist usage. These stricter filtering steps in our workflow likely reduced the number of retained peaks, leading to fewer RUNX1-bound differentially expressed genes compared to the paper.
+
+3. INPUT_rep2 has much lower read depth than the other samples, which can reduce peak-calling sensitivity and may have contributed to NEAT1 not being detected.
+
+# What is the rationale behind combining these two analyses in this way? What additional conclusions is it supposed to enable you to draw?
+
+The rationale behind combining the 5kb TSS and 20kb whole gene analyses is to distinguish between different modes of RUNX1-mediated transcriptional regulation and to assess the relative contributions of promoter-proximal versus distal regulatory mechanisms. The 5kb TSS window captures RUNX1 binding at promoters, representing direct transcriptional control, while the 20kb whole gene window includes enhancers, intronic regulatory elements, and other distal sites that can regulate gene expression through long-range chromatin interactions. Comparing these two approaches reveals that a substantial portion of RUNX1 regulation occurs through distal elements. In our analysis, 24% more genes (41 additional genes) were captured with the broader window, demonstrating that enhancer-mediated regulation is an important component of RUNX1's function. This dual approach also enables us to distinguish directly regulated genes (those with RUNX1 binding) from indirectly affected genes (differentially expressed without nearby RUNX1 binding), revealing that RUNX1 functions within broader regulatory networks where direct binding to some genes triggers cascading effects throughout the transcriptome. Overall, combining these analyses provides insight into both the mechanisms and the scope of RUNX1's role in controlling gene expression programs.
+
+# 2. In figures 2D and 2E, the authors identify and highlight two specific genes that were identified in both experiments. Using your list of filtered and reproducible peaks, a genome browser of your choice, and your bigWig files, please re-create these figures with your own results (You do not need to include the RNAseq data, but you should re-create the genomic tracks from your ChIPseq results)
+
+```{r}
+# Check if these genes are in your overlapping genes
+"MALAT1" %in% overlap_genes
+"NEAT1" %in% overlap_genes
+```
+
+```{r}
+# Check MALAT1 in your filtered peaks
+peak_df %>%
+  filter(`Gene Name` == "MALAT1")
+```
+
+```{r}
+# Look up NEAT1 in the RNA-seq data
+rnaseq_df %>%
+  filter(genename == "NEAT1")
+```
+
+```{r}
+# Check if NEAT1 has peaks
+peak_df %>%
+  filter(`Gene Name` == "NEAT1")
+```
+
+```{r}
+img <- image_read("malat1.png")
+plot(img)
+```
+
+```{r}
+img <- image_read("neat1.png")
+plot(img)
+```
+
+# From your annotated peaks, do you observe statistically significant peaks in these same two genes? - How similar do your genomic tracks appear to those in the paper? If you observe any differences, comment briefly on why there may be discrepancies.
+
+From our annotated peaks, we observe a statistically significant RUNX1 peak at MALAT1, consistent with the original paper's findings. However, NEAT1 does not appear in our final annotated peaks file, representing a key discrepancy from the published results. Investigation revealed that NEAT1 had a significant peak called in replicate 2 (chr11:65,422,232-65,422,470) but not in replicate 1, causing it to fail our reproducibility filter that required peaks in both replicates. Our genomic tracks for MALAT1 appear similar to those in the paper, showing clear RUNX1 binding signal above input background, while NEAT1 shows visual ChIP-seq signal in the bigWig files that was nonetheless filtered out. These discrepancies likely stem from differences in genome version (hg38 vs hg19), and stringency of reproducibility requirements between our analysis and the original study.
+
+```{r}
+# Check if these genes are in your overlapping genes
+"MALAT1" %in% overlap_genes
+"NEAT1" %in% overlap_genes
+```
+
+# Re-create the table found in supplementary figure S2A. Compare the results with your own findings.
+
+```{r}
+# For gzipped FASTQ files
+count_fastq_reads <- function(file) {
+  # Read all lines
+  lines <- readLines(gzfile(file))
+  # Each read = 4 lines
+  num_reads <- length(lines) / 4
+  return(num_reads)
+}
+
+# Count reads in each file
+ip_rep1_reads <- count_fastq_reads("/projectnb/bf528/materials/project-3-chipseq/full_files/IP_rep1.fastq.gz")
+ip_rep2_reads <- count_fastq_reads("/projectnb/bf528/materials/project-3-chipseq/full_files/IP_rep2.fastq.gz")
+input_rep1_reads <- count_fastq_reads("/projectnb/bf528/materials/project-3-chipseq/full_files/INPUT_rep1.fastq.gz")
+input_rep2_reads <- count_fastq_reads("/projectnb/bf528/materials/project-3-chipseq/full_files/INPUT_rep2.fastq.gz")
+
+cat("IP rep1:", ip_rep1_reads, "\n")
+cat("IP rep2:", ip_rep2_reads, "\n")
+cat("INPUT rep1:", input_rep1_reads, "\n")
+cat("INPUT rep2:", input_rep2_reads, "\n")
+```
+
+```{r}
+# Read flagstat file and extract mapped reads
+extract_mapped <- function(flagstat_file) {
+  lines <- readLines(flagstat_file)
+  mapped_line <- grep("mapped", lines, value = TRUE)
+  # Extract first number
+  mapped_count <- as.numeric(sub(" .*", "", mapped_line))
+  return(mapped_count)
+}
+
+# Use it
+ip_rep1_mapped <- extract_mapped("results/flagstat/IP_rep1.flagstat.txt")
+ip_rep2_mapped <- extract_mapped("results/flagstat/IP_rep2.flagstat.txt")
+input_rep1_mapped <- extract_mapped("results/flagstat/INPUT_rep1.flagstat.txt")
+input_rep2_mapped <- extract_mapped("results/flagstat/INPUT_rep2.flagstat.txt")
+
+cat("IP rep1 mapped:", ip_rep1_mapped, "\n")
+cat("IP rep2 mapped:", ip_rep2_mapped, "\n")
+cat("INPUT rep1 mapped:", input_rep1_mapped, "\n")
+cat("INPUT rep2 mapped:", input_rep2_mapped, "\n")
+
+```
+
+```{r}
+# Create the table with your actual data
+table_a <- data.frame(
+  `Sample Name` = c("RUNX1 ChIP 1", "RUNX1 ChIP 2", "INPUT 1", "INPUT 2"),
+  `Biological Replicate` = c(1, 2, 1, 2),
+  `Raw Reads` = c(29734121, 29988988, 30075142, 10900442),
+  `Mapped Reads` = c(27788333, 28197249, 28578769, 10055226),
+  check.names = FALSE
+)
+
+# Display as a nice table
+kable(table_a, format = "markdown", 
+      caption = "Sequencing and alignment statistics for RUNX1 ChIP-seq")
+
+# Or print it
+print(table_a)
+```
+
+# Do you observe differences in the reported number of raw and mapped reads?
+
+Yes, we observe substantial differences in both raw and mapped read counts between our analysis and the paper.
+
+# If so, provide at least two explanations for the discrepancies.
+
+1. Different genome builds: We aligned to GRCh38, while the paper have used an older genome version (hg19).
+
+2. Different filtering steps: While our flagstat counts represent aligned reads after trimming, the paper may have applied additional filtering steps or used different parameters while trimming.
+
+# Compare your correlation plot with the one found in supplementary figure S2B.
+
+```{r}
+img <- image_read("results/plotcorr_full/correlation_plot.png")
+plot(img)
+```
+
+# Do you observe any differences in your calculated metrics?
+
+Yes, we observe lower correlation values compared to the paper. Most notably, our IP replicate correlation (0.63) is substantially lower than the paper's RUNX1 ChIP replicate correlation (0.91). Our INPUT replicates show reasonably good agreement (0.86 vs 0.95 in paper), but still slightly lower. The correlations between IP and INPUT samples are also generally lower in our analysis (0.52-0.73 range vs 0.69-0.76 in paper). Additionally, it should be noted that the paper used Pearson correlation coefficient while our analysis used Spearman correlation, which could contribute to the observed differences in correlation values.
+
+# What was the author's takeaway from this figure? What is your conclusion from this figure regarding the success of the experiment?
+
+The authors' takeaway was that biological replicates showed high correlation (0.91 for ChIP, 0.95 for INPUT), indicating good reproducibility and experimental quality. The lower correlations between ChIP and INPUT samples (0.69-0.76) confirmed appropriate signal enrichment in the immunoprecipitated samples.
+
+Our conclusion is that while our experiment shows moderate reproducibility, there is more variability between replicates than observed in the original study. The IP replicate correlation of 0.63 suggests reasonable but not excellent agreement, which may explain why some peaks (like NEAT1) were called in only one replicate. The use of Spearman correlation (which measures monotonic relationships) versus Pearson correlation (which measures linear relationships) may account for some of the numerical differences, as Spearman is more robust to outliers but may yield lower values for strongly linear relationships. The INPUT replicates show better correlation (0.86), indicating more consistent background signal. The hierarchical clustering correctly groups IP replicates together and INPUT replicates together, confirming that the experiment successfully enriched for RUNX1-bound regions despite the moderate replicate correlation. This lower reproducibility likely contributed to our more stringent filtering and the differences observed in peak calling results.
+
+# Create a venn diagram with the same information as found in figure S2C.
+
+```{r}
+# Count peaks in each replicate file
+rep1_count <- length(readLines("results/findpeaks_full/rep1_peaks.txt"))
+rep2_count <- length(readLines("results/findpeaks_full/rep2_peaks.txt"))
+
+cat("Rep1 peaks:", rep1_count, "\n")
+cat("Rep2 peaks:", rep2_count, "\n")
+```
+
+```{r}
+fit <- euler(c(
+  "Rep1" = 82971,      # Only in rep1 (89400 - 6429)
+  "Rep2" = 16508,      # Only in rep2 (22937 - 6429)
+  "Rep1&Rep2" = 6429   # Overlap
+))
+
+plot(fit, 
+     fills = c("#E74C3C", "#9B59B6"),
+     quantities = TRUE,
+     labels = c("Rep1", "Rep2"))
+```
+
+# Do you observe any differences in your results compared to what you see?
+
+Yes, we observe substantial differences in both the total number of peaks and the distribution between replicates.
+
+# If so, provide at least two explanations for the discrepancies in the number of called peaks.
+
+1. Different genome builds: We aligned to GRCh38, while the paper have used an older genome version (hg19).
+
+2. Different post-peak-calling filtering steps: Both analyses used HOMER for peak calling, but the downstream reproducibility and filtering steps likely differed because the paper did not specify how they defined “reproducible peaks.” In our pipeline, we required direct overlap between peaks from both replicates and removed ENCODE blacklist regions, whereas the paper may have used alternative methods such as IDR thresholds, different overlap criteria, or different blacklist usage. These stricter filtering steps in our workflow likely reduced the number of retained peaks, leading to fewer RUNX1-bound differentially expressed genes compared to the paper.
+
+# Analyze the annotated peaks.
+
+# In your created notebook, detail the methodology used to perform the enrichment:
+Gene enrichment analysis was performed using Enrichr (https://maayanlab.cloud/Enrichr/). 5468 unique gene names were extracted from our annotated peaks file and were submitted to Enrichr for analysis. The enrichment was analyzed across multiple databases including GO Biological Process 2025, GO Molecular Function 2025, WikiPathway 2024 Human, and KEGG 2021 Human pathways to identify overrepresented biological processes and pathways.
+
+# Create a single figure / plot / table that displays some of the top results from the analysis.
+
+```{r}
+# Get unique gene names from your peaks
+gene_list <- peak_df %>%
+  pull(`Gene Name`) %>%
+  unique() %>%
+  na.omit()
+
+# Check available databases
+dbs <- listEnrichrDbs()
+
+# Run enrichment on common databases
+dbs_to_use <- c("GO_Biological_Process_2025", 
+                "GO_Molecular_Function_2025",
+                "KEGG_2021_Human",
+                "WikiPathway_2024_Human",
+                "Reactome_Pathways_2024")
+
+enriched <- enrichr(gene_list, dbs_to_use)
+
+# View results
+head(enriched$GO_Biological_Process_2025)
+
+# Plot top results
+plotEnrich(enriched$GO_Biological_Process_2025, showTerms = 20, numChar = 40)
+```
+
+# Comment briefly in a paragraph about the results you observe and why they may be interesting.
+
+The enrichment analysis revealed that genes associated with RUNX1 binding peaks are significantly enriched for processes related to mesenchymal cell proliferation, membrane organization, and DNA-directed DNA polymerase activity (GO Biological Process), as well as chromatin modifying enzymes and chromatin organization (Reactome Pathways). These results are highly consistent with RUNX1's known roles described in the literature. The enrichment for positive regulation of mesenchymal cell proliferation aligns with RUNX1's dual function as both an oncogene and tumor suppressor in breast cancer, particularly in epithelial-mesenchymal transition processes. Most notably, the strong enrichment for chromatin organization and chromatin modifying enzyme pathways directly validates the paper's central finding that RUNX1 functions in cooperation with chromatin modifier and remodeling enzymes to alter chromatin structure and higher-order genome organization. The presence of DNA polymerase activity and various regulatory processes further supports RUNX1's diverse roles in both promoter and enhancer regulation, consistent with the observation that 30% of RUNX1 binding sites are intergenic, suggesting functions beyond simple transcriptional activation.
+
+```{r}
+sessioninfo::session_info()
+```
